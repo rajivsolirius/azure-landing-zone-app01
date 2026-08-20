@@ -32,8 +32,24 @@
 # hairpinned through Azure Firewall in this implementation.
 # It is locally segmented using NSGs.
 #
+# ALZ POLICY NOTE:
+#
+# The Platform Landing Zone enforces a Deny Azure Policy
+# requiring subnets to have a Network Security Group.
+#
+# For that reason the subnets below are created using
+# AzAPI rather than azurerm_subnet.
+#
+# This allows the subnet + NSG + Route Table association
+# to be submitted to Azure in a single ARM request.
 # ==========================================================
 
+
+#
+# ----------------------------------------------------------
+# App001 Virtual Network
+# ----------------------------------------------------------
+#
 
 resource "azurerm_virtual_network" "app001" {
   name                = var.virtual_network_name
@@ -47,17 +63,47 @@ resource "azurerm_virtual_network" "app001" {
 
 
 #
+# ==========================================================
+# App001 Subnets
+# ==========================================================
+#
+# The three routed subnets are created with BOTH:
+#
+#   - Network Security Group
+#   - App001 spoke Route Table
+#
+# already attached.
+#
+# This is necessary so the subnet satisfies the ALZ
+# Deny policy at creation time.
+#
+# ==========================================================
+
+
+#
 # ----------------------------------------------------------
 # Workload subnet 01
 # ----------------------------------------------------------
 #
 
-resource "azurerm_subnet" "workload_01" {
-  name                 = var.workload_01_subnet_name
-  resource_group_name  = azurerm_resource_group.network.name
-  virtual_network_name = azurerm_virtual_network.app001.name
+resource "azapi_resource" "workload_01_subnet" {
+  type      = "Microsoft.Network/virtualNetworks/subnets@2024-01-01"
+  name      = var.workload_01_subnet_name
+  parent_id = azurerm_virtual_network.app001.id
 
-  address_prefixes = var.workload_01_subnet_prefixes
+  body = {
+    properties = {
+      addressPrefixes = var.workload_01_subnet_prefixes
+
+      networkSecurityGroup = {
+        id = azurerm_network_security_group.routed["workload_01"].id
+      }
+
+      routeTable = {
+        id = azurerm_route_table.spoke.id
+      }
+    }
+  }
 }
 
 
@@ -67,12 +113,24 @@ resource "azurerm_subnet" "workload_01" {
 # ----------------------------------------------------------
 #
 
-resource "azurerm_subnet" "workload_02" {
-  name                 = var.workload_02_subnet_name
-  resource_group_name  = azurerm_resource_group.network.name
-  virtual_network_name = azurerm_virtual_network.app001.name
+resource "azapi_resource" "workload_02_subnet" {
+  type      = "Microsoft.Network/virtualNetworks/subnets@2024-01-01"
+  name      = var.workload_02_subnet_name
+  parent_id = azurerm_virtual_network.app001.id
 
-  address_prefixes = var.workload_02_subnet_prefixes
+  body = {
+    properties = {
+      addressPrefixes = var.workload_02_subnet_prefixes
+
+      networkSecurityGroup = {
+        id = azurerm_network_security_group.routed["workload_02"].id
+      }
+
+      routeTable = {
+        id = azurerm_route_table.spoke.id
+      }
+    }
+  }
 }
 
 
@@ -82,12 +140,24 @@ resource "azurerm_subnet" "workload_02" {
 # ----------------------------------------------------------
 #
 
-resource "azurerm_subnet" "management" {
-  name                 = var.management_subnet_name
-  resource_group_name  = azurerm_resource_group.network.name
-  virtual_network_name = azurerm_virtual_network.app001.name
+resource "azapi_resource" "management_subnet" {
+  type      = "Microsoft.Network/virtualNetworks/subnets@2024-01-01"
+  name      = var.management_subnet_name
+  parent_id = azurerm_virtual_network.app001.id
 
-  address_prefixes = var.management_subnet_prefixes
+  body = {
+    properties = {
+      addressPrefixes = var.management_subnet_prefixes
+
+      networkSecurityGroup = {
+        id = azurerm_network_security_group.routed["management"].id
+      }
+
+      routeTable = {
+        id = azurerm_route_table.spoke.id
+      }
+    }
+  }
 }
 
 
@@ -96,19 +166,32 @@ resource "azurerm_subnet" "management" {
 # Private Endpoint subnet
 # ----------------------------------------------------------
 #
+# Private Endpoints are deliberately kept in their own
+# dedicated subnet.
+#
+# The standard App001 route table is NOT associated with
+# this subnet at this stage.
+#
+# NSG processing IS enabled for Private Endpoints so that
+# the subnet NSG can enforce our explicit access rules.
+#
+# ----------------------------------------------------------
+#
 
-resource "azurerm_subnet" "private_endpoints" {
-  name                 = var.private_endpoint_subnet_name
-  resource_group_name  = azurerm_resource_group.network.name
-  virtual_network_name = azurerm_virtual_network.app001.name
+resource "azapi_resource" "private_endpoints_subnet" {
+  type      = "Microsoft.Network/virtualNetworks/subnets@2024-01-01"
+  name      = var.private_endpoint_subnet_name
+  parent_id = azurerm_virtual_network.app001.id
 
-  address_prefixes = var.private_endpoint_subnet_prefixes
+  body = {
+    properties = {
+      addressPrefixes = var.private_endpoint_subnet_prefixes
 
-  #
-  # Explicitly enable NSG processing for Private Endpoints.
-  #
-  # We are NOT attaching the general spoke UDR to this
-  # subnet at this stage.
-  #
-  private_endpoint_network_policies = "NetworkSecurityGroupEnabled"
+      networkSecurityGroup = {
+        id = azurerm_network_security_group.private_endpoints.id
+      }
+
+      privateEndpointNetworkPolicies = "NetworkSecurityGroupEnabled"
+    }
+  }
 }

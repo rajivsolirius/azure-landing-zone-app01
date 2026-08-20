@@ -1,26 +1,32 @@
 #
 # ==========================================================
-# Standard NSGs
+# App001 Network Security Groups
 # ==========================================================
 #
-# These NSGs are used by:
+# Security model:
 #
-# - workload subnet 01
-# - workload subnet 02
-# - management subnet
+#   - deny unnecessary lateral App001 traffic
+#   - explicitly permit access to Private Endpoints
+#   - permit outbound traffic toward the Hub
+#   - allow remaining outbound traffic
 #
-# General policy:
+# IMPORTANT:
 #
-# 1. Permit HTTPS to Private Endpoints.
-# 2. Permit outbound traffic to the Hub.
-# 3. Deny other App001-local subnet traffic.
-# 4. Permit remaining outbound traffic.
+# "Allow outbound" at the NSG does NOT mean traffic bypasses
+# Azure Firewall.
 #
-# The remaining outbound traffic is subsequently subject
-# to the subnet's routing table. Therefore Internet and
-# remote-spoke traffic will be routed to Azure Firewall.
+# The NSG determines whether traffic may leave the subnet.
+#
+# The Route Table then determines its next hop.
 #
 # ==========================================================
+
+
+#
+# ==========================================================
+# Workload / Management NSGs
+# ==========================================================
+#
 
 resource "azurerm_network_security_group" "routed" {
   for_each = local.routed_subnets
@@ -35,24 +41,30 @@ resource "azurerm_network_security_group" "routed" {
 
 #
 # ----------------------------------------------------------
-# INBOUND:
-# Deny traffic originating inside App001's VNet.
+# INBOUND
 #
-# Higher-priority explicit allows can be added later.
+# Deny traffic originating from elsewhere inside the
+# App001 VNet.
+#
+# Higher-priority explicit allows can be introduced later
+# for genuine workload-to-workload requirements.
 # ----------------------------------------------------------
 #
 
 resource "azurerm_network_security_rule" "deny_app001_inbound" {
   for_each = local.routed_subnets
 
-  name                        = "Deny-App001-Inbound"
-  priority                    = 4000
-  direction                   = "Inbound"
-  access                      = "Deny"
-  protocol                    = "*"
-  source_port_range           = "*"
-  destination_port_range      = "*"
-  source_address_prefixes     = var.virtual_network_address_space
+  name      = "Deny-App001-Inbound"
+  priority  = 4000
+  direction = "Inbound"
+  access    = "Deny"
+  protocol  = "*"
+
+  source_port_range      = "*"
+  destination_port_range = "*"
+
+  source_address_prefixes = var.virtual_network_address_space
+
   destination_address_prefix = "*"
 
   resource_group_name         = azurerm_resource_group.network.name
@@ -62,24 +74,30 @@ resource "azurerm_network_security_rule" "deny_app001_inbound" {
 
 #
 # ----------------------------------------------------------
-# OUTBOUND:
-# Explicitly allow HTTPS to the Private Endpoint subnet.
+# OUTBOUND
 #
-# This rule must take precedence over the App001-local deny.
+# Explicitly permit HTTPS access to the dedicated Private
+# Endpoint subnet.
+#
+# This rule has a higher priority than the App001-local deny.
+#
 # ----------------------------------------------------------
 #
 
 resource "azurerm_network_security_rule" "allow_private_endpoints_https_outbound" {
   for_each = local.routed_subnets
 
-  name                         = "Allow-PrivateEndpoints-HTTPS-Outbound"
-  priority                     = 100
-  direction                    = "Outbound"
-  access                       = "Allow"
-  protocol                     = "Tcp"
-  source_port_range            = "*"
-  destination_port_range       = "443"
-  source_address_prefix        = "*"
+  name      = "Allow-PrivateEndpoints-HTTPS-Outbound"
+  priority  = 100
+  direction = "Outbound"
+  access    = "Allow"
+  protocol  = "Tcp"
+
+  source_port_range      = "*"
+  destination_port_range = "443"
+
+  source_address_prefix = "*"
+
   destination_address_prefixes = var.private_endpoint_subnet_prefixes
 
   resource_group_name         = azurerm_resource_group.network.name
@@ -89,24 +107,30 @@ resource "azurerm_network_security_rule" "allow_private_endpoints_https_outbound
 
 #
 # ----------------------------------------------------------
-# OUTBOUND:
-# Explicitly allow traffic towards Hub address ranges.
+# OUTBOUND
 #
-# Routing remains separate from NSG processing.
+# Permit traffic destined for the regional Connectivity Hub.
+#
+# More-specific VNet peering routes normally cause these
+# destinations to use the direct App001 -> Hub peering.
+#
 # ----------------------------------------------------------
 #
 
 resource "azurerm_network_security_rule" "allow_hub_outbound" {
   for_each = local.routed_subnets
 
-  name                         = "Allow-Hub-Outbound"
-  priority                     = 110
-  direction                    = "Outbound"
-  access                       = "Allow"
-  protocol                     = "*"
-  source_port_range            = "*"
-  destination_port_range       = "*"
-  source_address_prefix        = "*"
+  name      = "Allow-Hub-Outbound"
+  priority  = 110
+  direction = "Outbound"
+  access    = "Allow"
+  protocol  = "*"
+
+  source_port_range      = "*"
+  destination_port_range = "*"
+
+  source_address_prefix = "*"
+
   destination_address_prefixes = var.hub_address_spaces
 
   resource_group_name         = azurerm_resource_group.network.name
@@ -116,25 +140,31 @@ resource "azurerm_network_security_rule" "allow_hub_outbound" {
 
 #
 # ----------------------------------------------------------
-# OUTBOUND:
-# Deny other local App001 VNet traffic.
+# OUTBOUND
 #
-# Private Endpoint HTTPS has already been explicitly allowed
-# at priority 100.
+# Deny traffic from these subnets to other addresses inside
+# the App001 VNet.
+#
+# The Private Endpoint HTTPS exception at priority 100 is
+# evaluated before this deny.
+#
 # ----------------------------------------------------------
 #
 
 resource "azurerm_network_security_rule" "deny_app001_outbound" {
   for_each = local.routed_subnets
 
-  name                        = "Deny-App001-Outbound"
-  priority                    = 4000
-  direction                   = "Outbound"
-  access                      = "Deny"
-  protocol                    = "*"
-  source_port_range           = "*"
-  destination_port_range      = "*"
-  source_address_prefix       = "*"
+  name      = "Deny-App001-Outbound"
+  priority  = 4000
+  direction = "Outbound"
+  access    = "Deny"
+  protocol  = "*"
+
+  source_port_range      = "*"
+  destination_port_range = "*"
+
+  source_address_prefix = "*"
+
   destination_address_prefixes = var.virtual_network_address_space
 
   resource_group_name         = azurerm_resource_group.network.name
@@ -144,26 +174,36 @@ resource "azurerm_network_security_rule" "deny_app001_outbound" {
 
 #
 # ----------------------------------------------------------
-# OUTBOUND:
-# Allow everything else.
+# OUTBOUND
 #
-# This does NOT bypass Azure Firewall.
+# Permit remaining traffic.
 #
-# The route table sends destinations without a more-specific
-# route to the Azure Firewall using 0.0.0.0/0.
+# IMPORTANT:
+#
+# This does NOT bypass the Hub firewall.
+#
+# Traffic not matching a more-specific route is subsequently
+# matched by:
+#
+#     0.0.0.0/0 -> Azure Firewall
+#
+# in the App001 spoke route table.
+#
 # ----------------------------------------------------------
 #
 
 resource "azurerm_network_security_rule" "allow_remaining_outbound" {
   for_each = local.routed_subnets
 
-  name                       = "Allow-Remaining-Outbound"
-  priority                   = 5000
-  direction                  = "Outbound"
-  access                     = "Allow"
-  protocol                   = "*"
-  source_port_range          = "*"
-  destination_port_range     = "*"
+  name      = "Allow-Remaining-Outbound"
+  priority  = 4050
+  direction = "Outbound"
+  access    = "Allow"
+  protocol  = "*"
+
+  source_port_range      = "*"
+  destination_port_range = "*"
+
   source_address_prefix      = "*"
   destination_address_prefix = "*"
 
@@ -188,9 +228,15 @@ resource "azurerm_network_security_group" "private_endpoints" {
 
 
 #
-# Permit App001 workloads/management to connect to Private
-# Endpoints using HTTPS.
+# ----------------------------------------------------------
+# PRIVATE ENDPOINT INBOUND
 #
+# Permit HTTPS from the App001 workload and management
+# subnets.
+#
+# ----------------------------------------------------------
+#
+
 resource "azurerm_network_security_rule" "private_endpoint_https_inbound" {
   name = "Allow-App001-HTTPS-Inbound"
 
@@ -216,9 +262,14 @@ resource "azurerm_network_security_rule" "private_endpoint_https_inbound" {
 
 
 #
-# Deny any other App001-local inbound traffic to the
-# Private Endpoint subnet.
+# ----------------------------------------------------------
+# PRIVATE ENDPOINT INBOUND
 #
+# Deny all other App001-local inbound traffic.
+#
+# ----------------------------------------------------------
+#
+
 resource "azurerm_network_security_rule" "private_endpoint_deny_app001_inbound" {
   name = "Deny-Other-App001-Inbound"
 
@@ -230,36 +281,10 @@ resource "azurerm_network_security_rule" "private_endpoint_deny_app001_inbound" 
   source_port_range      = "*"
   destination_port_range = "*"
 
-  source_address_prefixes      = var.virtual_network_address_space
+  source_address_prefixes = var.virtual_network_address_space
+
   destination_address_prefixes = var.private_endpoint_subnet_prefixes
 
   resource_group_name         = azurerm_resource_group.network.name
   network_security_group_name = azurerm_network_security_group.private_endpoints.name
-}
-
-
-#
-# ----------------------------------------------------------
-# NSG associations
-# ----------------------------------------------------------
-#
-
-resource "azurerm_subnet_network_security_group_association" "workload_01" {
-  subnet_id                 = azurerm_subnet.workload_01.id
-  network_security_group_id = azurerm_network_security_group.routed["workload_01"].id
-}
-
-resource "azurerm_subnet_network_security_group_association" "workload_02" {
-  subnet_id                 = azurerm_subnet.workload_02.id
-  network_security_group_id = azurerm_network_security_group.routed["workload_02"].id
-}
-
-resource "azurerm_subnet_network_security_group_association" "management" {
-  subnet_id                 = azurerm_subnet.management.id
-  network_security_group_id = azurerm_network_security_group.routed["management"].id
-}
-
-resource "azurerm_subnet_network_security_group_association" "private_endpoints" {
-  subnet_id                 = azurerm_subnet.private_endpoints.id
-  network_security_group_id = azurerm_network_security_group.private_endpoints.id
 }
